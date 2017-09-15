@@ -1,53 +1,73 @@
-from datetime import date, datetime
-from time import sleep
+
+import argparse
+import json
+import logging
+from os import makedirs, path
 from random import randint, uniform
+from time import sleep, strftime, time
+
+import seleniumrequests
+from pushbullet import InvalidKeyError, Pushbullet
+
 from selenium import webdriver
-from selenium.common.exceptions import (TimeoutException,
-                                        NoSuchElementException,
-                                        StaleElementReferenceException,
-                                        WebDriverException,
-                                        UnexpectedAlertPresentException)
+from selenium.common.exceptions import *
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from pushbullet import InvalidKeyError, Pushbullet
-
-LOG_FILE = "[%s] GBFDriver.log" % (date.today())
-HOTKEYS = ["q", "w", "e", "r", "t", "y"]
-USE_PB = False
-API_KEY = {
-    "PB": "",
-}
-
-PROFILE = ('C:/Users/kyoukaya/profile')
-OPTIONS = webdriver.ChromeOptions()
-OPTIONS.add_argument('user-data-dir=%s' % PROFILE)
-GBF = webdriver.Chrome(chrome_options=OPTIONS)
+CFG = json.load(open('config.json', 'r', encoding='utf-8'))
+HOTKEYS = CFG['viramate_hotkeys']
+USE_PB = CFG['use_pb']
+PB_KEY = CFG['keys']['pushbullet']
+LOG_FILE = '[{}] GBFDriver.log'.format(strftime('%m-%d %H%M'))
 
 
 def log(message):
     """Prints to console and outputs to log file"""
-    with open(LOG_FILE, "a", encoding="utf-8", newline='') as fout:
-        message = "[%s] %s" % (str(datetime.now())[0:-4], message)
-        print(message)
-        fout.write(message + "\n")
+    try:
+        with open('.\\logs\\'+LOG_FILE, 'a', encoding='utf-8', newline='') as fout:
+            message = '[{}] {}'.format(strftime('%a %H:%M:%S'), message)
+            print(message)
+            fout.write(message + '\n')
+    except FileNotFoundError:
+        makedirs('.\\logs')
+        log('Created log folder')
+        log(message)
+
+
+def setup_driver_instance():
+    if ARGS.profile is None:
+        ARGS.profile = 'profile0'
+    profile = path.abspath('.\\profiles\\' + ARGS.profile)
+    chrome_binary = CFG['chrome_binary']
+    webdriver_binary = CFG['webdriver_binary']
+
+    print(f'Config loaded...\nPB: {PB_KEY}, USE_PB: {USE_PB}, HOTKEYS: {HOTKEYS}, PROFILE: {profile}\
+    \nchrome_binary: {chrome_binary}, webdriver_binary: {webdriver_binary}\n')
+
+    options = webdriver.ChromeOptions()
+    profile = path.abspath(profile)
+    log(f'Profile path: {profile}')
+    options.add_argument('user-data-dir={}'.format(profile))
+    options.add_argument('--disable-infobars')
+    gbf = webdriver.Chrome(executable_path='.\\chromedriver.exe', chrome_options=options)
+    return gbf
 
 
 def alert_operator(message, pause=True):
     """Push alerts for CAPTCHAs, etc."""
-    if USE_PB is True and message.__len__() > 0:
+    """if USE_PB is True and message.__len__() > 0:
         try:
-            pub = Pushbullet(API_KEY["PB"])
-            push = pub.push_note("GBFdriver", message)
+            pub = Pushbullet(PB_KEY)
+            push = pub.push_note('GBFdriver', message)
             log(push)
         except InvalidKeyError:
-            log("Invalid PB API key!")
+            log('Invalid PB API key!')"""
     print(message)
     if pause:
-        input("Press enter to continue")
+        input('Press enter to continue')
 
 
 def set_viewport_size(driver, width, height):
@@ -58,128 +78,169 @@ def set_viewport_size(driver, width, height):
     driver.set_window_size(*window_size)
 
 
-def random_click(ele, var_x, var_y):
-    clicked = False
-    while not clicked:
-        log("Element at: %d, %d" % (ele.location["x"], ele.location["y"]))
-        log("Clicking %s with variance X: %d, Y: %d" % (ele, var_x, var_y))
-        actions = ActionChains(GBF)
-        actions.move_to_element(ele).move_by_offset(var_x, var_y).click_and_hold().perform()
-        sleep(uniform(0.05, 0.15))
-        actions.release().perform()
-        clicked = True
-
-
-def java_click(ele, var_x, var_y):
-    """In the off case we might not want to use the default way of clicking things"""
-    ele_loc = ele.location
-    ele_loc_x = ele_loc["x"]
-    ele_loc_y = ele_loc["y"]
-    log("%d, %d" % (ele_loc_x, ele_loc_y))
-    log("Clicking %s using javascript with variance X: %d, Y: %d" %
-        (ele, var_x, var_y))
-    script = "document.elementFromPoint(%s,%s).click();" % (
-        ele_loc_x, ele_loc_y)
-    GBF.execute_script(script)
-
-
-def clicker(ele, delay=0.5, kind="random", variance=3):
-    """Takes a CSS selector in the form of a CSS selector/xpath string or an element object
-    and clicks on it.
-    Additional arguments (delay, kind, variance)"""
-    if isinstance(ele, str) and ele_check(ele):
-        print(ele)
-        if ele[0] == '/':
-            log("Finding element by xpath")
-            ele = GBF.find_element_by_xpath(ele)
-        else:
-            ele = GBF.find_element_by_css_selector(ele)
-    elif isinstance(ele, str):
-        log("Element does not exist: %s" % ele)
-        return
-    if delay > 0:
-        delay = uniform(1.25 * delay, 0.75 * delay)
-        log("Sleeping for %d seconds before clicking" % (delay))
-        sleep(delay)
-    var_x = randint(0 - variance, variance)
-    var_y = randint(0 - variance, variance)
-    try:
-        # Handle potential errors that arise from non-existent elements
-        if kind == "random":
-            random_click(ele, var_x, var_y)
-        elif kind == "java":
-            java_click(ele, var_x, var_y)
-        elif kind == "fallback":
-            # Can't introduce click variance with native methods...
-            ele.click()
-        else:
-            log("Invalid kind '%s' inputted!" % (kind))
-    except (StaleElementReferenceException, NoSuchElementException):
-        log("Element does not exist")
-        return False
-    except UnexpectedAlertPresentException as exp:
-        log('%s\nAlert detected, dismissing' % exp)
-        GBF.switch_to_alert().accept()
-        clicker(ele, delay, kind, variance)
-
-
 def ele_check(ele, wait=1):
     try:
-        if ele[0] == '/':
-            WebDriverWait(GBF, wait).until(
+        if ele[0] == '/':  # If input is a xpath string check using xpath
+            WebDriverWait(GBF, wait, poll_frequency=0.10).until(
                 EC.visibility_of_element_located((By.XPATH, ele))
             )
             return True
-        else:
-            WebDriverWait(GBF, wait).until(
+        else:  # Else treat it as a CSS selector
+            WebDriverWait(GBF, wait, poll_frequency=0.10).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, ele))
             )
             return True
     except TimeoutException:
         return False
     except UnexpectedAlertPresentException as exp:
-        log('%s\nAlert detected, dismissing' % exp)
+        log('{}\nAlert detected, dismissing'.format(exp))
         GBF.switch_to_alert().accept()
         return ele_check(ele)
 
 
 def wait_until_css(css, maxwait=5):
-    log("Waiting for %s for %d seconds" % (css, maxwait))
+    log('Waiting for {} for {} seconds'.format(css, maxwait))
     waiting = True
-    tries = 0
+    start = time()
     while waiting:
         if ele_check(css):
             return True
         else:
-            if maxwait > 0:
-                tries += 1
-            if tries > maxwait:
-                log("Maximum tries reached")
+            if (time() - start) > maxwait:
+                log('Timed out')
                 return False
 
 
-def load_page(url, wait_for="", ignore_url=False):
+def wait_for_page_load(polling_rate=0.1):
+    """Wait for the document state to be ready and for jQuery to return 0 active connections.
+    Returns True if page is loaded and False if it timed out after waiting 5 seconds.
+    If there's a need for speed :tm:, set polling_rate to 0"""
+    counter = 0
+    start_time = time()
+    while (time() - start_time) < 5:
+        counter += 1
+        try:
+            if GBF.execute_script('return document.readyState==="complete"'):
+                return True
+        except WebDriverException as message:
+            if 'jQuery is not defined' in str(message):
+                # log('Attempted to use a jQuery method without the lib being loaded lol..')
+                continue
+            else:
+                log('Something is up yo...')
+                raise
+        finally:
+            sleep(polling_rate)
+    log('Timed out while waiting for page to load...')
+    return False
+
+
+def load_page(url, wait_for='', ignore_url=False):
     GBF.get(url)
-    sleep(0.1)
+    wait_for_page_load()  # Not entirely sure how we should detect redirects...
     if GBF.current_url != url and not ignore_url:
-        message = "Unexpected URL: %s" % (GBF.current_url)
-        log(message)
+        message = 'Unexpected URL: {}'.format(GBF.current_url)
         alert_operator(message)
-        load_page(url, wait_for)
-    if wait_for != "":
-        wait_until_css(wait_for)
+        log(message)
+    if wait_for != '':
+        wait_until_css(wait_for, maxwait=1)
+
+
+def random_click(ele, var_x, var_y):
+    clicked = False
+    while not clicked:
+        actions = ActionChains(GBF)
+        actions.move_to_element(ele).move_by_offset(var_x, var_y).click_and_hold().perform()
+        sleep(uniform(0.05, 0.075))
+        actions.release().perform()
+        clicked = True
+
+
+def js_click(ele, var_x, var_y):
+    """In the off case we might not want to use the default way of clicking things"""
+    ele_loc = ele.location
+    ele_loc_x = ele_loc['x']+var_x
+    ele_loc_y = ele_loc['y']+var_y
+    script = 'document.elementFromPoint({},{}).click();'.format(ele_loc_x, ele_loc_y)
+    GBF.execute_script(script)
+
+
+def clicker(ele, delay=0.1, kind='random', variance=0.2):
+    """Takes a CSS selector in the form of a CSS selector/xpath string or an element object
+    and clicks on it. Returns True if clicked and False if not clicked."""
+    try:
+        if isinstance(ele, str) and ele_check(ele):
+            log('Clicking on \'{}\'. Method: {}, variance: {}'.format(ele, kind, variance))
+            if ele[0] == '/':
+                ele = GBF.find_element_by_xpath(ele)
+            else:
+                ele = GBF.find_element_by_css_selector(ele)
+    except NoSuchElementException:
+        log('Element does not exist: {}'.format(ele))
+        return
+    except StaleElementReferenceException:
+        log('Element is stale: {}'.format(ele))
+        return
+    if delay > 0:
+        # Shouldn't really matter but it helps us to not spam clicks when stuck in loops
+        delay = uniform(delay, 0.5 * delay)
+        sleep(delay)
+    try:
+        # Variance routine
+        size = {k: int(ele.size[k]*variance) for k in ele.size}
+        var_x = randint(0 - size['width'], size['width'])
+        var_y = randint(0 - size['height'], size['height'])
+        if size['width'] < 3 or size['height'] < 3:
+            log('WARNING: Low variance expected, button is too small\n' +
+                f'{ele.size}, {var_x}, {var_y}')
+
+        # Handle potential errors that arise from non-existent elements
+        if kind == 'random':
+            random_click(ele, var_x, var_y)
+        elif kind == 'js':
+            # Simulate a click in javascript
+            js_click(ele, var_x, var_y)
+        elif kind == 'fallback':
+            # Can't introduce click variance
+            ele.click()
+        else:
+            log('Invalid kind \'{}\' inputted!'.format(kind))
+            raise Exception('Invalid kind \'{}\' inputted!'.format(kind))
+        # Return True if no exceptions occured
+        return True
+    except (StaleElementReferenceException, NoSuchElementException):
+        log('Element does not exist')
+        return False
+    except UnexpectedAlertPresentException as exp:
+        log('{}\nAlert detected, dismissing'.format(exp))
+        GBF.switch_to.alert.accept()
+        clicker(ele, delay, kind, variance)
+    except AttributeError:
+        pass
+
+
+def send_keys_to_element(ele, keys):
+    if isinstance(ele, str) and ele_check(ele):
+        if ele[0] == '/':
+            ele = GBF.find_element_by_xpath(ele)
+        else:
+            ele = GBF.find_element_by_css_selector(ele)
+    elif isinstance(ele, str):
+        log('Element does not exist: {}'.format(ele))
+        return
+    ele.send_keys(keys)
 
 
 def skill_check():
     """Returns a list of lists with skill availability booleans"""
     available = []
-    cards = GBF.find_elements_by_css_selector(".quick-panel.prt-ability-list")
+    cards = GBF.find_elements_by_css_selector('.quick-panel.prt-ability-list')
     for counter in range(0, len(cards)):
         char_avail = []
-        char = cards[counter].find_elements_by_css_selector(".lis-ability")
+        char = cards[counter].find_elements_by_css_selector('.lis-ability')
         for charcount in range(0, len(char)):
-            if char[charcount].get_attribute("class") == \
-                    "lis-ability btn-ability-available quick-button":
+            if char[charcount].get_attribute('class') == \
+                    'lis-ability btn-ability-available quick-button':
                 char_avail.append(True)
             else:
                 char_avail.append(False)
@@ -188,10 +249,11 @@ def skill_check():
 
 
 def do_skill(character, skill, target=-1):
+    # Viramate dependency
     available = skill_check()
     if not available[character][skill]:
-        log("Character %s's skill %s is unavailable." % (character, skill))
-    log("Using character %s's skill %s. Target %s" %
+        log('Character {}\'s skill {} is unavailable.'.format(character, skill))
+    log('Using character {}\'s skill {}. Target {}'.format
         (character, skill, target))
     actions = ActionChains(GBF)
     actions.send_keys(format(character + 1, str())).perform()
@@ -201,120 +263,150 @@ def do_skill(character, skill, target=-1):
     if target > -1:
         actions.send_keys(HOTKEYS[target]).perform()
         sleep(0.2)
+		
+
+def summon_page():
+    wait_for_page_load()
+    if ARGS.halofarm:
+        # Currently requires viramate's favourite tab, picks the 1st summon listed
+        target = '.btn-supporter.lis-supporter.faved'
+        target2 = '.btn-usual-ok'
+        log('In AH Summon Selection page')
+        # Check if in summon page of AH
+        if ('http://game.granbluefantasy.jp/#quest/supporter/510031/5') in GBF.current_url:
+            log('Checking if Favourite tab is available')
+            # Check if Favourite tab is available
+            #if ele_check('.icon-supporter-type-f.btn-type.selected', wait=1):
+                #log('Favourite tab available')
+                #log('Checking if Favourite tab is selected')
+            #log('Favourite tab selected')
+            log('Selecting a summon')
+            wait_until_css('.btn-supporter.lis-supporter.faved', 1)
+            if ele_check(target):
+                clicker(target)
+                wait_until_css('.prt-deck-select', 1)
+                if not ele_check('.prt-deck-select'):
+                    clicker(target)
+                    wait_until_css('.prt-deck-select', 1)
+                log('Checking if AP is sufficient')
+                wait_until_css('.txt-stamina-after', 1)
+                if int(GBF.find_element_by_class_name('txt-stamina-after').text)<0:
+                    input('Insufficient AP. Refill and press enter to continue...\n')
+                log('Clicking on Ok')
+                if ele_check(target2):
+                    clicker(target2)
+                    return
+                #else:
+                    # Do...
+            #else:
+                # Do...
+        #else:
+            # Do...
 
 
 def summon_check():
-    """Returns list of available summons"""
-    if not ele_check(".quick-summon"):
-        log("Couldn't find summons")
-        return
-    cards = GBF.find_elements_by_css_selector(".quick-summon")
     available = []
+    """Returns list of available summons"""
+    if not ele_check('.quick-summon'):
+        log('Couldn\'t find summons')
+        return available
+    cards = GBF.find_elements_by_css_selector('.quick-summon')
     for counter in range(0, 6):
-        if cards[counter].get_attribute("class") == "quick-summon available":
+        if cards[counter].get_attribute('class') == 'quick-summon available':
             available.append(counter)
         else:
             continue
-    log("Available summons: %s" % str(available))
+    log('Available summons: {}'.format(str(available)))
     return available
 
 
 def do_summon(num):
     """We should probably use a click instead since that's way faster"""
     if num not in summon_check():
-        log("Summon %s unavailable!" % num)
+        log('Summon {} unavailable!'.format(num))
         return
-    log("Using summon number %s" % num)
-    actions = ActionChains(GBF)
-    actions.send_keys(5).perform()
-    sleep(0.5)
-    actions.send_keys(HOTKEYS[num]).perform()
-    sleep(0.5)
-    actions.send_keys(Keys.SPACE).perform()
+    log('Using summon number {}'.format(num))
+    wait_until_css('.quick-summon')
+    # Hardcoded last summon
+    clicker(r'//*[@id="wrapper"]/div[3]/div[2]/div[9]/div[11]/div[6]', variance=0.2)
 
 
 def ougi_check():
-    if ele_check(".btn-lock.lock0"):
+    if ele_check('.btn-lock.lock0'):
         return True
-    elif ele_check(".btn-lock.lock1"):
+    elif ele_check('.btn-lock.lock1'):
         return False
 
 
 def set_ougi(ougi):
+    # Viramate dependency
     while ougi != ougi_check():
         actions = ActionChains(GBF)
-        actions.send_keys("c").perform()
+        actions.send_keys('c').perform()
         sleep(0.2)
 
 
 def do_attack(auto=False, ougi=False):
-    if not ele_check(".btn-attack-start.display-on"):
-        log("Unable to attack!")
+    #TODO: press next if it appears 
+    if not ele_check('.btn-attack-start.display-on'):
+        log('Unable to attack!')
         return False
     if ougi != ougi_check():
         set_ougi(ougi)
-    log("Attacking. Auto=%s, Ougi=%s" % (auto, ougi))
-    clicker(".btn-attack-start.display-on", variance=6)
+    log('Attacking. Auto={}, Ougi={}'.format(auto, ougi))
+    clicker('.btn-attack-start.display-on', variance=.25)
     if auto:
-        if wait_until_css(".btn-auto"):
-            clicker(".btn-auto")
+        if wait_until_css('.btn-auto'):
+            clicker('.btn-auto')
     return True
 
 
 def wait_until_url(url):
-    counter = 0
-    while counter < 40:
+    start = time()
+    while (time() - start) < 40:
         if url in GBF.current_url:
             return
-        sleep(0.25)
-    log("Somehow we're at %s" % GBF.current_url)
-
-"""def claim_rewards():
-    if ele_check(".btn-usual-ok"):
-        cancel_ok = GBF.find_elements_by_class_name("btn-usual-ok")[0]
-        clicker(cancel_ok)
-    sleep(2)
-    wait_until_css("lis-raid")
-    r_list = GBF.find_elements_by_class_name("lis-raid")
-    for r in r_list:
-        log('claiming reward - did not join raid')
-        r.click()
-    if ele_check(".btn-usual-ok"):
-        cancel_ok = GBF.find_elements_by_class_name("btn-usual-ok")[0]
-        clicker(cancel_ok)"""
+    log('Somehow we\'re at {}'.format(GBF.current_url))
 
 
 def popup_check():
-    # CAPTCHA identifier <div> class="prt-popup-header">Access Verification</div>
-    waiting = True
+    """Detects and deals with popups"""
     try:
-        ele = GBF.find_element_by_css_selector(".prt-popup-header")
+        ele = GBF.find_element_by_css_selector('.prt-popup-header')
         if not ele.is_displayed():
             return
-    except:
+    except Exception:
         return
     text = ele.text
-    log("%s popup detected" % text)
-    if text == "Not enough AP":
-        log("Not enough AP, using 1/2 pot")
-        clicker(".btn-use-full.index-1")
-        if wait_until_css(".btn-usual-ok"):
-            clicker(".btn-usual-ok")
+    if text == 'Not enough AP':
+        log('Not enough AP, using 1/2 pot')
+        clicker('.btn-use-full.index-1')
+        if wait_until_css('.btn-usual-ok'):
+            clicker('.btn-usual-ok')
             return
-    if text == "Access Verification":
-        alert_operator("CAPTCHA detected! Help!")
+    elif text == 'Access Verification':
+        # We can push the captcha image to the operator and wait for a response through PB, just an
+        # idea
+        alert_operator('CAPTCHA detected! Help!')
         return
-    else:
-        # if ele_check(".btn-usual-cancel"):
+    #NM Halo check
+    elif text == 'Limited-Time Quests':
+	    # if ele_check('.btn-usual-cancel'):
         actions = ActionChains(GBF)
-        actions.send_keys("`").send_keys(Keys.SPACE).perform()
-        log("Popup dismissed")
+        actions.send_keys('`').send_keys(Keys.SPACE).perform()  # Viramate dependency
+        input('NM Halo detected. Paused. Hit enter to continue...\n')
+    else:
+        # if ele_check('.btn-usual-cancel'):
+        log('"{}" popup detected and dismissed.'.format(text))
+        actions = ActionChains(GBF)
+        actions.send_keys('`').send_keys(Keys.SPACE).perform()  # Viramate dependency
 
-"""def check_bp():
-    wait_until_css("prt-user-bp-value")
-    bp = GBF.find_elements_by_class_name("prt-user-bp-value")[0]
-    num = bp.get_attribute("title")
-    return (int)(num)"""
+
+def check_bp():
+    wait_until_css('prt-user-bp-value')
+    bp = GBF.find_elements_by_class_name('prt-user-bp-value')[0]
+    num = bp.get_attribute('title')
+    return int(num)
 
 
 def check_health():
@@ -328,137 +420,456 @@ def check_health():
 
 
 def wait_for_skill_queue():
-    log("Waiting for skills to finish casting")
-    while not ele_check(".prt-ability-rail-overlayer.hide"):
-        if GBF.current_url not in "http://game.granbluefantasy.jp/#raid_multi/":
-            log("We seem to have exited the raid page while waiting for skills")
+    log('Waiting for skills to finish casting')
+    while not ele_check('.prt-ability-rail-overlayer.hide'):
+        if GBF.current_url not in 'http://game.granbluefantasy.jp/#raid_multi/':
+            log('We seem to have exited the raid page while waiting for skills')
             return False
     return True
 
 
 def wait_for_ready():
-    waiting = True
-    log("Waiting for ready...")
-    while waiting:
-        if wait_until_css(".btn-attack-start.display-on"):
-            log("Ready!")
-            return True
-        else:
-            if "http://game.granbluefantasy.jp/#raid_multi/" not in GBF.current_url:
-                log("We seem to have exited the raid page while waiting for ready")
-                return False
-            continue
+    ready_status = False
+    # TODO: check for next
+    try:
+        ready_status = GBF.execute_script('return stage.gGameStatus.clear')
+    except WebDriverException:
+        log('Failed to retrieve stage.gGameStatus')
+    if ready_status:
+        return False
+    elif wait_until_css('.btn-attack-start.display-on', maxwait=1):
+        log('Ready!')
+        return True
+    elif 'http://game.granbluefantasy.jp/#raid_multi/' not in GBF.current_url:
+        log('We seem to have exited the raid page while waiting for ready')
+    return False
 
 
 def results_page(homepage, target, rounds):
-    log("In results page")
-    wait_until_css(".btn-usual-ok", maxwait=1)
-    load_page(homepage, target, ignore_url=True)
-    rounds += 1
-    return rounds
+    # Need to figure out if a hell is triggered
+    # Character EMP id cjs-lp-rankup
+    if ARGS.halofarm:
+        log('In results page')
+        # TODO wait for jquery loads
+        wait_until_css('.btn-usual-ok', maxwait=1)
+		# Clicks ok
+        clicker('.btn-usual-ok', variance=0.2)
+        wait_until_css('.btn-control', maxwait=1)
+		# Click Quests
+        clicker('.btn-control', variance=0.2)
+		# Friend Request popup check
+        popup_check()
+		# NM Halo popup check
+        popup_check()
+        sleep(0.5)
+        load_page(homepage, target, ignore_url=True)
+        rounds += 1
+        return rounds
+
+    else:
+        log('In results page')
+        # TODO wait for jquery loads
+        wait_until_css('.btn-usual-ok', maxwait=1)
+        load_page(homepage, target, ignore_url=True)
+        rounds += 1
+        return rounds
 
 
 def raid_battle():
+    """Handles what we do in a fight"""
+    # TODO: parse Stage
     if not wait_for_ready():
         return
-    log("In battle page")
-    do_summon(5)
-    if not wait_for_skill_queue():
-        return
-    if not do_attack():
-        return
-    sleep(1)
+    log('In battle page')
+    if ARGS.halofarm:
+        do_attack()
+    else:
+        do_skill(0, 0)
+    #if not wait_for_skill_queue():
+    #    return
+    #if not do_attack():
+    #    return
     GBF.refresh()
 
 
 def create_coop_lobby():
-    target = ".btn-create-room.location-href"
-    target2 = ".btn-entry-room"
-    if wait_until_css(target, maxwait=2):
+    target = '.btn-create-room'
+    target2 = '.btn-entry-room'
+    sleep(0.3)
+    if 'result_multi' in GBF.current_url:
+        return
+    if wait_until_css(target, maxwait=1):
         clicker(target)
-    if wait_until_css(target2, maxwait=2):
+    if 'result_multi' in GBF.current_url:
+        return
+    if wait_until_css(target2, maxwait=1):
         clicker(target2)
+    if 'result_multi' in GBF.current_url:
+        return
+    if wait_until_css('.btn-coopraid.location-href', maxwait=1):
+        clicker('.btn-coopraid.location-href')
 
 
 def coop_lobby():
-    log("In coop lobby page")
-    target = ".btn-repeat-last"
-    target2 = ".btn-quest-start.multi.se-quest-start"
-    counter = 0
+    log('In coop lobby page')
+    target = '.btn-repeat-last'
+    target2 = '.btn-quest-start.multi.se-quest-start'
+    start = time()
     while True:
         popup_check()
         c_url = GBF.current_url
-        if c_url == "http://game.granbluefantasy.jp/#coopraid" or \
-           c_url == "http://game.granbluefantasy.jp/#coopraid/room/entry":
+        if c_url == 'http://game.granbluefantasy.jp/#coopraid/room/entry':
             create_coop_lobby()
-        elif "http://game.granbluefantasy.jp/#coopraid/room/" not in c_url:
+        elif 'http://game.granbluefantasy.jp/#coopraid/room/' not in c_url:
             return
-        if ele_check(".btn-make-ready-large.not-ready", wait=0.1):
+        #if ele_check('.btn-make-ready-large.not-ready', wait=0):
             # We'll try to handle party and summon selection someday
-            alert_operator("Please choose a summon")
-        if ele_check(target, wait=0.1):
-            ele = GBF.find_element(By.CSS_SELECTOR, target)
-            clicker(ele)
-        if ele_check(target2, wait=0.1):
-            ele = GBF.find_element(By.CSS_SELECTOR, target2)
-            clicker(ele)
+            #alert_operator('Please choose a summon')
+        if ARGS.hostslime:
+            if ele_check(target, wait=0):
+                clicker(target)
+            if ele_check(target2, wait=0):
+                clicker(target2)
+                sleep(0.5)
+                popup_check()
+                sleep(0.5)
+                return
+        if ele_check('.btn-execute-ready.se-ok', wait=0):
+            clicker('.btn-execute-ready.se-ok')
             sleep(0.5)
             popup_check()
             sleep(0.5)
             return
-        if counter < 8:
-            # Counter to refresh the room after awhile since it likes to stop
-            # updating for no reason
-            counter += 1
-            log("Counter: %d" % counter)
+        #Check if a ccop raid is hosted but leechers have to refresh to update their view (not working correctly)
+        """if ARGS.hostslime:
+            if ele_check(target, wait=0.5):
+                clicker(target)
+            if not ele_check(target2, wait=2):
+                clicker('.btn-members-refresh')
+            else:
+                clicker(target2)
+                sleep(0.5)
+                popup_check()
+                sleep(0.5)
+                return
         else:
-            actions = ActionChains(GBF)
-            actions.send_keys(Keys.F5).perform()
-            sleep(.5)
+            if not ele_check('.prt-unset-quest.guide-style', wait=1):
+                if ARGS.hostslime:
+                    clicker(target)
+            elif ele_check('.btn-execute-ready.se-ok', wait=2):                
+                clicker('.btn-execute-ready.se-ok')
+                sleep(0.5)
+                popup_check()
+                sleep(0.5)
+                return
+            else:
+                clicker('.btn-members-refresh')"""
+        if (time() - start) > 2:
+            # Refresh the room after awhile because it likes to get stuck
+            clicker('.btn-members-refresh')
+            #GBF.refresh()
             return
 
 
+
 def top_page():
-    clicker(".btn-login.switch-position")
+    clicker('.btn-login.switch-position')
 
 
 def authentication_page():
-    clicker('//*[@id="gree-login"]')
+    clicker('//*[@id="gree-login"]/img')
+    # clicker('//*[@id="mobage-login"]/img')
+    # clicker('//*[@id="dmm-login"]/img')
 
 
-def main_loop():
-    homepage = "http://game.granbluefantasy.jp/#coopraid"
-    target = ".prt-head-current"
-    rounds = 0
-    while True:
-        sleep(2)
-        cur_url = GBF.current_url
-        if "http://game.granbluefantasy.jp/#coopraid" in cur_url:
-            coop_lobby()
-            popup_check()  # Checks for CAPTCHAs and weird stuff after we hit the start button
-        elif "http://game.granbluefantasy.jp/#raid_multi/" in cur_url:
-            raid_battle()
-        elif "http://game.granbluefantasy.jp/#result_multi/" in cur_url:
-            rounds = results_page(homepage, target, rounds)
-        elif "http://game.granbluefantasy.jp/#top" in cur_url:
-            top_page()
-        elif "http://game.granbluefantasy.jp/#authentication" in cur_url:
-            authentication_page()
-        else:
-            load_page(homepage, target, ignore_url=True)
-            sleep(.5)
+def play_poker():
+    """Poker routine adapted from https://github.com/shengdi/granblue-selenium
+    Only works on the small setting of the game as the clicks to hold cards is hardcoded"""
+    # Only get the page if we're not on the page...
+    if GBF.current_url != 'http://game.granbluefantasy.jp/#casino/game/poker/200040':
+        GBF.get("http://game.granbluefantasy.jp/#casino/game/poker/200040")
+    wait_until_css(".prt-start")
+    # Deal
+    clicker(".prt-start")
+    wait_until_css('.prt-ok')
+
+    cards = []
+    suits = []
+    clicks = []
+    counts = {'0': 0, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0}
+    for card in GBF.execute_script('return cards_1_Array'):
+        suit = int(card[:2].strip('_'))
+        rank = int(card[-2:].strip('_'))
+        cards.append((suit, rank))
+    for i in range(1, 6):
+        """
+        Suites: Spade = 1, Hearts = 2, Diamonds = 3, Club = 4, Joker = 99
+        Ranks: A = 1, 2 = 2, ..., 10 = 10, J = 11, Q = 12, K = 13, Joker = 99
+        """
+        num = GBF.execute_script("return exportRoot.cards_%d[1]" % i)
+        if num in cards:
+            print('cards: ')
+            print(cards)
+            print('num')
+            print(num)
+            # Click this..
+            clicks.append(i)  # Click card number i
+            # Find the duplicate and append to clicks
+            clicks.append(cards.index(num) + 1)
+        if num == '99':
+            clicks.append(i)  # Click card number i
+
+        # Count suits..
+        suit = GBF.execute_script("return exportRoot.cards_%d[0]" % i)
+        if suit == '99':
+            # bah just ignore..since joker has been selected it won try all
+            # suits..
+            suit = '0'
+        counts[suit] += 1
+        suits.append(suit)
+        cards.append(num)
+
+    # If no duplicates found just click all of the same suite..
+    if len(clicks) == 0:
+        for i in counts:
+            if counts[i] == 4:
+                # Hold all of this suite..
+                for j, k in enumerate(suits):
+                    del k
+                    if suits == i:
+                        clicks.append(j + 1)
+
+    hold = set(clicks)
+    print(hold)
+
+    # try x 10 y 400
+    # try x 100 y 224
+
+    # actions = ActionChains(GBF)
+    # actions.send_keys(Keys.END).perform()
+    # actions.move_to_element(GBF.find_elements_by_id("cav")[0]).perform()
+
+    # 0,0 is card 3
+    # alright we just loop and print ba
+    # for x in range(0,320,10):
+    #  for y in range(0,400,10):
+    #    actions = ActionsChains(client.GBF)
+
+    canv = GBF.find_element_by_id("canv")
+    for i in hold:
+        if i == 1:
+            print('holding card 1')
+            actions = ActionChains(GBF)
+            actions.move_to_element_with_offset(
+                canv, 20, 210).click().perform()
+        if i == 2:
+            print('holding card 2')
+            actions = ActionChains(GBF)
+            actions.move_to_element_with_offset(
+                canv, 80, 210).click().perform()
+        if i == 3:
+            print('holding card 3')
+            actions = ActionChains(GBF)
+            actions.move_to_element_with_offset(
+                canv, 140, 210).click().perform()
+        if i == 4:
+            print('holding card 4')
+            actions = ActionChains(GBF)
+            actions.move_to_element_with_offset(
+                canv, 200, 210).click().perform()
+        if i == 5:
+            print('holding card 5')
+            actions = ActionChains(GBF)
+            actions.move_to_element_with_offset(
+                canv, 260, 210).click().perform()
+
+    # Keep
+    sleep(1)
+    clicker(".prt-ok")
+
+    # Check if we get to doubleup...
+    # Check if prt-yes-shine and prt-no-shine is visiable...
+    doubleup = False
+    print('waiting for doubleup')
+    wait_until_css(".prt-yes", maxwait=5)
+    # check prt-yes, if it has display: none that means we have no doubleup
+    # or check if it has display: block
+    yes = GBF.find_elements_by_class_name("prt-yes")[0]
+    if yes.value_of_css_property('display') == 'block':
+        clicker('.prt-yes')
+        doubleup = True
+        print('doubleup !')
+    else:
+        print('no doubleup')
+        return
+
+    if doubleup:
+        count_doubleup = 0
+        while count_doubleup < 11:
+            sleep(2)
+            doubleup_card_1 = GBF.execute_script(
+                "return exportRoot.doubleup_card_1[1]")
+            high = GBF.find_elements_by_class_name("prt-high-shine")[0] 
+            low = GBF.find_elements_by_class_name("prt-low-shine")[0]
+            high_array = ['2', '3', '4', '5', '6', '7']
+            low_array = ['8', '9', '10', '11', '12', '13', '1']
+
+            if doubleup_card_1 in high_array:
+                print('card is %s, choosing high !' % doubleup_card_1)
+                clicker('//*[@id="wrapper"]/div[3]/div[2]/div[8]/div[6]')
+            elif doubleup_card_1 in low_array:
+                print('card is %s, choosing low !' % doubleup_card_1)
+                clicker('//*[@id="wrapper"]/div[3]/div[2]/div[8]/div[5]')
+
+            doubleup_card_2 = GBF.execute_script(
+                "return exportRoot.doubleup_card_1[1]")
+            # check if fail...
+            sleep(3)
+            # check prt-yes, if it has display: none that means we have no
+            # doubleup
+            check_fail = GBF.find_elements_by_class_name("prt-yes")[0]
+            if check_fail.value_of_css_property('display') == 'block':
+                print('doubleup succeed !')
+            else:
+                print('doubleup failed..')
+                return
+
+            # if doubleup_card_2 == u'8':
+            #  click_displayed("prt-no-shine")
+            #  print 'met 8..not double upping..'
+            #  return
+            # else:
+            clicker(".prt-yes")
+            print('doubleup again !')
+            count_doubleup += 1
+    else:
+        print('returning')
+        return
 
 
-def main():
-    log("Profile path: %s" % PROFILE)
+def loop_poker():
+    lost = 0
+    time_start = time()
+    while (time() - time_start) < (60 * 60 * 3):
+        popup_check()  # Should be able to detect captchas
+        play_poker()
+        lost += 1
+        print('Lost me %d gold' % (lost * 1000))
+    alert_operator('Bot done')
+
+
+def test_for_auth():
+    # Send off some requests and maybe we'll get kicked out?
+    pass
+
+
+def task_loop():
+    """Takes a task from the dispatcher and carries it out"""	
+    if ARGS.halofarm:
+        homepage = 'http://game.granbluefantasy.jp/#quest/supporter/510031/5'
+        target = '.prt-head-current'
+        rounds = 0
+        while True:
+            wait_for_page_load()
+            cur_url = GBF.current_url
+            if 'http://game.granbluefantasy.jp/#quest/supporter/510031/5' in cur_url:
+                summon_page()		
+                popup_check()  # Checks for CAPTCHAs and weird stuff after we hit the start button
+            elif '#raid' in cur_url:
+                raid_battle()
+            elif '#result' in cur_url:
+                rounds = results_page(homepage, target, rounds)
+            elif 'http://game.granbluefantasy.jp/#top' in cur_url:
+                top_page()
+            elif 'http://game.granbluefantasy.jp/#authentication' in cur_url:
+                authentication_page()
+            elif 'loginbonus' in cur_url:
+                clicker('.cjs-login')
+            else:
+                load_page(homepage, target, ignore_url=True)
+	
+    else:
+        homepage = 'http://game.granbluefantasy.jp/#coopraid'
+        target = '.prt-head-current'
+        rounds = 0
+        while True:		
+            wait_for_page_load()
+            cur_url = GBF.current_url
+            if 'http://game.granbluefantasy.jp/#coopraid' in cur_url:
+                coop_lobby()
+                popup_check()  # Checks for CAPTCHAs and weird stuff after we hit the start button
+            elif 'http://game.granbluefantasy.jp/#raid_multi' in cur_url:
+                raid_battle()
+            elif 'http://game.granbluefantasy.jp/#result_multi' in cur_url:
+                rounds = results_page(homepage, target, rounds)
+            elif 'http://game.granbluefantasy.jp/#top' in cur_url:
+                top_page()
+            elif 'http://game.granbluefantasy.jp/#authentication' in cur_url:
+                authentication_page()
+            elif 'loginbonus' in cur_url:
+                clicker('.cjs-login')
+            else:
+                load_page(homepage, target, ignore_url=True)
+
+
+def dispatcher(tasklist):
+    """Takes a list/tuple of tasks and runs through them with suitable fallback responses"""
+
+    tasklist = CFG['tasklist']
+    dispatch_functions = {
+        # "main_loop": main_loop,
+        # "do_attack": do_attack
+    }
+    wait_for_page_load()
+
+    for task in tasklist:
+        args = list()
+        kwargs = dict()
+
+        if isinstance(task, (list, tuple)):
+            # Check through the list/tuple of args for any kwargs, then separate them
+            args = list(task[1:])
+            task = task[0]
+            counter = 0
+
+            for arg in args:
+                if isinstance(arg, dict):
+                    # Unpack dicts and remove them from args
+                    for item in arg:
+                        kwargs[item] = arg[item]
+                    del args[counter]
+                else:
+                    # Pass if not a dict
+                    counter += 1
+
+        response = dispatch_functions[task](*args, **kwargs)
+        if response == 1001:
+            log('{} has completed successfully'.format(task.__name__))
+        elif response:
+            log('{} has failed'.format(task.__name__))
+            if args is not None:
+                dispatcher((task, args))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('profile', nargs='?', type=str)
+    parser.add_argument('--hostslime', action='store_true')
+    parser.add_argument('--leechslime', action='store_true')
+    parser.add_argument('--halofarm', action='store_true')
+    parser.add_argument('--debug', '-d', action='store_true')
+    ARGS = parser.parse_args()
+
+    GBF = setup_driver_instance()
+    load_page('http://game.granbluefantasy.jp/#mypage', ignore_url=True)
     set_viewport_size(GBF, 400, 600)
-    main_loop()
-
-if __name__ == "__main__":
+    if ARGS.debug:
+        import code
+        code.interact(local=locals())
+    test_for_auth()
     try:
-        main()
-    except WebDriverException:
-        log("Chrome exited")
-        quit()
+        input('Paused. Hit enter to continue...\n')
+        task_loop()
     except Exception as exp:
-        alert_operator("Fatal exception has occured, bot terminating\n%s" % exp)
+        alert_operator('Fatal error', pause=False)
+        raise
